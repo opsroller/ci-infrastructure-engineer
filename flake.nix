@@ -73,6 +73,8 @@
               format = "qcow2";
               diskSize = "auto";
               additionalSpace = "512M";
+              # The guest is rebuilt, never updated in place: no nixpkgs copy.
+              copyChannel = false;
             };
 
           # Test clients run a unit that prints a marker on the serial

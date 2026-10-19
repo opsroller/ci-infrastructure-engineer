@@ -88,6 +88,7 @@ v create /dev/stdin >/dev/null <<XML
   <memory unit='GiB'>2</memory>
   <vcpu>2</vcpu>
   <os><type arch='x86_64' machine='q35'>hvm</type></os>
+  <features><acpi/></features>
   <cpu mode='host-passthrough'/>
   <devices>
     <disk type='volume' device='disk'>
@@ -108,7 +109,8 @@ capture "$sport" "$work/server.log"
 echo "waiting for the PXE server guest"
 deadline=$(( SECONDS + timeout ))
 until grep -aq 'dnsmasq-dhcp.*proxy on subnet' "$work/server.log" 2>/dev/null; do
-  if (( SECONDS > deadline )); then
+  # A dnsmasq that cannot start restarts forever; stop at the first failure.
+  if (( SECONDS > deadline )) || grep -aq 'dnsmasq.*FAILED to start up' "$work/server.log" 2>/dev/null; then
     echo "FAIL: PXE server did not start" >&2
     sed 's/\x1b\[[0-9;]*[a-zA-Z]//g' "$work/server.log" | tr -d '\r' | tail -40 >&2
     exit 1

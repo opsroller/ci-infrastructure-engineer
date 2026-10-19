@@ -50,6 +50,7 @@ up)
   <memory unit='GiB'>2</memory>
   <vcpu>2</vcpu>
   <os><type arch='x86_64' machine='q35'>hvm</type></os>
+  <features><acpi/></features>
   <cpu mode='host-passthrough'/>
   <devices>
     <disk type='volume' device='disk'>

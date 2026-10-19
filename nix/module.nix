@@ -39,6 +39,8 @@ let
     port=0
     interface=${cfg.interface}
     bind-dynamic
+    # Proxy-DHCP keeps no leases, but dnsmasq still opens the file.
+    dhcp-leasefile=/var/lib/pxe-coreos/dnsmasq.leases
     ${lib.optionalString (cfg.network != null) "dhcp-range=${cfg.network},proxy"}
     enable-tftp
     tftp-root=${tree.tftpRoot}
@@ -136,6 +138,7 @@ in
       serviceConfig = {
         ExecStartPre = "${pkgs.dnsmasq}/bin/dnsmasq --test --conf-file=${dnsmasqConf}";
         ExecStart = startDnsmasq;
+        StateDirectory = "pxe-coreos";
         Restart = "on-failure";
         RestartSec = 5;
       };

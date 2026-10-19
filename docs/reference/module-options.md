@@ -45,6 +45,6 @@ NixOS module `nixosModules.pxe-coreos` (also `nixosModules.default`).
 | Script | Purpose |
 | --- | --- |
 | `scripts/test-pxe-boot [timeout]` | Boots a diskless UEFI QEMU guest through the full chain. Exits 0 on success. |
-| `scripts/test-pxe-libvirt [timeout]` | Boots the server guest and a diskless UEFI client on an isolated libvirt network, whose own DHCP server hands out addresses. Exits 0 when the client boots. |
+| `scripts/test-pxe-libvirt [timeout]` | Boots the server guest and a diskless UEFI client on an isolated libvirt network, whose own DHCP server hands out addresses. Exits 0 when the client boots, and 1 as soon as the server's dnsmasq fails to start. |
 | `scripts/pxe-server-vm up\|down\|status` | Runs the server as a persistent libvirt guest on a host interface. |
 | `scripts/update-fcos-pin [stream] [arch]` | Prints a new pin for `nix/fcos-pin.json`. |
