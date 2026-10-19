@@ -1,0 +1,158 @@
+#!/usr/bin/env bash
+# SPDX-License-Identifier: GPL-2.0-or-later
+#
+# End-to-end proxy-DHCP test on libvirt. A transient isolated network plays
+# the LAN: libvirt's own DHCP server hands out addresses and knows nothing
+# about network boot. The PXE server guest (pxe-server-test-image) takes an
+# address from it and answers boot requests with proxy-DHCP. A diskless UEFI
+# client then boots Fedora CoreOS through it. Passes when the client prints
+# the marker from its Ignition config on the serial console.
+#
+# The server's disk is a volume in a libvirt storage pool, deleted at exit.
+# Needs: access to qemu:///system, Nix, python3.
+# Usage: scripts/test-pxe-libvirt [timeout-seconds]
+# Env:   POOL (default "default"), KEEP_LOGS=<dir> to keep serial logs.
+set -euo pipefail
+
+timeout=${1:-900}
+uri=qemu:///system
+pool=${POOL:-default}
+id=$$
+net=pxe-test-$id
+server=pxe-test-server-$id
+client=pxe-test-client-$id
+vol=$server.qcow2
+bridge=virbr-pt$(( id % 100000 ))
+sport=$(( 20000 + id % 20000 ))
+cport=$(( sport + 1 ))
+here=$(cd "$(dirname "$0")/.." && pwd)
+v() { virsh -q -c "$uri" "$@"; }
+
+image=$(nix build --no-link --print-out-paths "$here#pxe-server-test-image")/nixos.qcow2
+work=$(mktemp -d)
+
+cleanup() {
+  v destroy "$client" >/dev/null 2>&1 || true
+  v destroy "$server" >/dev/null 2>&1 || true
+  v vol-delete --pool "$pool" "$vol" >/dev/null 2>&1 || true
+  v net-destroy "$net" >/dev/null 2>&1 || true
+  jobs -p | xargs -r kill 2>/dev/null || true
+  if [[ -n ${KEEP_LOGS:-} ]]; then mkdir -p "$KEEP_LOGS"; cp "$work"/*.log "$KEEP_LOGS"/ 2>/dev/null || true; fi
+  rm -rf "$work"
+}
+trap cleanup EXIT
+
+# Copies a guest's TCP serial port into a log file.
+capture() {
+  python3 - "$1" "$2" <<'PY' &
+import socket, sys, time
+port, path = int(sys.argv[1]), sys.argv[2]
+for _ in range(100):
+    try:
+        s = socket.create_connection(("127.0.0.1", port)); break
+    except OSError:
+        time.sleep(0.2)
+with open(path, "wb", buffering=0) as f:
+    while chunk := s.recv(4096):
+        f.write(chunk)
+PY
+}
+
+serial() {
+  cat <<XML
+    <serial type='tcp'>
+      <source mode='bind' host='127.0.0.1' service='$1'/>
+      <protocol type='raw'/>
+    </serial>
+XML
+}
+
+# The "LAN": DHCP for addresses only, no boot file, no route out.
+v net-create /dev/stdin >/dev/null <<XML
+<network>
+  <name>$net</name>
+  <bridge name='$bridge'/>
+  <ip address='192.168.151.1' netmask='255.255.255.0'>
+    <dhcp><range start='192.168.151.100' end='192.168.151.200'/></dhcp>
+  </ip>
+</network>
+XML
+
+size=$(stat -c %s "$image")
+v vol-create-as "$pool" "$vol" "$size" --format qcow2 >/dev/null
+v vol-upload --pool "$pool" "$vol" "$image"
+
+v create /dev/stdin >/dev/null <<XML
+<domain type='kvm'>
+  <name>$server</name>
+  <memory unit='GiB'>2</memory>
+  <vcpu>2</vcpu>
+  <os><type arch='x86_64' machine='q35'>hvm</type></os>
+  <cpu mode='host-passthrough'/>
+  <devices>
+    <disk type='volume' device='disk'>
+      <driver name='qemu' type='qcow2'/>
+      <source pool='$pool' volume='$vol'/>
+      <target dev='vda' bus='virtio'/>
+    </disk>
+    <interface type='network'>
+      <source network='$net'/>
+      <model type='virtio'/>
+    </interface>
+$(serial "$sport")
+  </devices>
+</domain>
+XML
+capture "$sport" "$work/server.log"
+
+echo "waiting for the PXE server guest"
+deadline=$(( SECONDS + timeout ))
+until grep -aq 'dnsmasq-dhcp.*proxy on subnet' "$work/server.log" 2>/dev/null; do
+  if (( SECONDS > deadline )); then
+    echo "FAIL: PXE server did not start" >&2
+    sed 's/\x1b\[[0-9;]*[a-zA-Z]//g' "$work/server.log" | tr -d '\r' | tail -40 >&2
+    exit 1
+  fi
+  sleep 2
+done
+grep -a 'proxy on subnet' "$work/server.log" | head -1 | tr -d '\r'
+
+v create /dev/stdin >/dev/null <<XML
+<domain type='kvm'>
+  <name>$client</name>
+  <memory unit='GiB'>6</memory>
+  <vcpu>2</vcpu>
+  <os firmware='efi'>
+    <type arch='x86_64' machine='q35'>hvm</type>
+    <firmware><feature enabled='no' name='secure-boot'/></firmware>
+    <boot dev='network'/>
+  </os>
+  <features><acpi/></features>
+  <cpu mode='host-passthrough'/>
+  <devices>
+    <interface type='network'>
+      <source network='$net'/>
+      <model type='virtio'/>
+    </interface>
+$(serial "$cport")
+  </devices>
+</domain>
+XML
+capture "$cport" "$work/client.log"
+
+echo "network-booting the UEFI client"
+while (( SECONDS < deadline )); do
+  if grep -aq 'PXE-TEST-BOOTED' "$work/client.log" 2>/dev/null; then
+    grep -a 'PXE-TEST-BOOTED' "$work/client.log" | head -1 | tr -d '\r'
+    grep -a 'Boot server' "$work/client.log" | head -1 | tr -d '\r'
+    echo "PASS: proxy-DHCP -> iPXE -> Fedora CoreOS live with Ignition in ${SECONDS}s"
+    exit 0
+  fi
+  sleep 5
+done
+echo "FAIL: no marker after ${timeout}s" >&2
+for f in server client; do
+  echo "--- $f serial" >&2
+  sed 's/\x1b\[[0-9;]*[a-zA-Z]//g' "$work/$f.log" | tr -d '\r' | tail -30 >&2
+done
+exit 1

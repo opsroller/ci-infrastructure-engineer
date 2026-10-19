@@ -20,6 +20,22 @@ DHCP request and the proxy offers `ipxe.efi` again. The compiled-in
 script replaces iPXE's normal autoboot, so that second offer is never
 followed and the boot cannot loop.
 
+## Finding the server without a fixed address
+
+The server may get its own address from DHCP, so nothing about it is
+built in. dnsmasq reads the subnet from its interface when it starts.
+The proxy-DHCP answer carries the server's address as `next-server`.
+iPXE stores that as `${proxydhcp/next-server}` and puts it in every
+URL it fetches, kernel arguments included.
+
+## A guest instead of a host service
+
+Proxy-DHCP and TFTP need root on the machine that runs them. As a
+libvirt guest on macvtap, the server is its own machine on the LAN.
+The host's system config stays unchanged, and anyone allowed to manage
+libvirt guests can add or remove the server. Its disk is a volume in a
+libvirt storage pool, like any other guest's.
+
 ## Live or installed
 
 By default, machines run Fedora CoreOS live: the whole OS sits in RAM

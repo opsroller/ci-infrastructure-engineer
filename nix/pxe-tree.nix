@@ -6,8 +6,10 @@
 {
   lib,
   pkgs,
-  # Address the booting machines use to reach this server.
-  serverAddress,
+  # Address the booting machines use to reach this server. null finds it at
+  # boot time from the proxy-DHCP answer, so the server can take its own
+  # address from DHCP.
+  serverAddress ? null,
   httpPort ? 8080,
   # Fedora CoreOS artifacts pin, as written by scripts/update-fcos-pin.
   pin ? lib.importJSON ./fcos-pin.json,
@@ -18,12 +20,23 @@
   kernelArgs ? [ ],
 }:
 let
-  base = "http://${serverAddress}:${toString httpPort}";
+  # iPXE expands ${pxe-server} in every command, kernel arguments included.
+  base = "http://\${pxe-server}:${toString httpPort}";
 
-  fetch = name: a: pkgs.fetchurl {
-    inherit (a) url sha256;
-    name = "fedora-coreos-${pin.release}-${name}";
-  };
+  findServer =
+    if serverAddress != null then
+      "set pxe-server ${serverAddress}"
+    else
+      ''
+        isset ''${proxydhcp/next-server} && set pxe-server ''${proxydhcp/next-server} || set pxe-server ''${next-server}
+      '';
+
+  fetch =
+    name: a:
+    pkgs.fetchurl {
+      inherit (a) url sha256;
+      name = "fedora-coreos-${pin.release}-${name}";
+    };
 
   ignition =
     pkgs.runCommand "config.ign"
@@ -72,6 +85,8 @@ let
     embedScript = pkgs.writeText "embed.ipxe" ''
       #!ipxe
       dhcp || goto failed
+      ${findServer}
+      echo Boot server ''${pxe-server}
       chain ${base}/boot.ipxe || goto failed
       :failed
       echo Network boot from ${base} failed; exiting to firmware
