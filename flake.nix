@@ -75,6 +75,8 @@
               additionalSpace = "512M";
               # The guest is rebuilt, never updated in place: no nixpkgs copy.
               copyChannel = false;
+              # The helper VM that fills the disk defaults to 1 GiB of RAM.
+              memSize = 8192;
             };
 
           # Test clients run a unit that prints a marker on the serial
