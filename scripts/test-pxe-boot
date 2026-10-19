@@ -1,0 +1,63 @@
+#!/usr/bin/env bash
+# SPDX-License-Identifier: GPL-2.0-or-later
+#
+# Boot test for the PXE trees: a diskless UEFI (OVMF) QEMU guest on user-mode
+# networking gets ipxe.efi from QEMU's built-in DHCP and TFTP, then fetches
+# the boot script, images and Ignition config over HTTP from the host, and
+# boots Fedora CoreOS. Passes when the marker unit from the Ignition config
+# prints its line on the serial console.
+#
+# Needs: Nix and /dev/kvm. No root, no bridge, no disks.
+# Usage: scripts/test-pxe-boot [timeout-seconds]
+set -euo pipefail
+
+timeout=${1:-900}
+here=$(cd "$(dirname "$0")/.." && pwd)
+
+tree=$(nix build --no-link --print-out-paths "$here#pxe-test")
+qemu=$(nix build --no-link --print-out-paths nixpkgs#qemu_kvm)/bin/qemu-system-x86_64
+ovmf=$(nix build --no-link --print-out-paths nixpkgs#OVMF.fd)/FV/OVMF.fd
+httpd=$(nix build --no-link --print-out-paths nixpkgs#darkhttpd)/bin/darkhttpd
+
+work=$(mktemp -d)
+log=$work/serial.log
+
+cleanup() {
+  [[ -n ${qemu_pid:-} ]] && kill "$qemu_pid" 2>/dev/null || true
+  [[ -n ${http_pid:-} ]] && kill "$http_pid" 2>/dev/null || true
+  [[ -n ${KEEP_LOG:-} ]] && cp "$log" "$KEEP_LOG" 2>/dev/null
+  rm -rf "$work"
+}
+trap cleanup EXIT
+
+# The guest reaches the host's loopback as 10.0.2.2.
+"$httpd" "$tree/http" --addr 127.0.0.1 --port 8080 --no-listing \
+  >"$work/http.log" 2>&1 &
+http_pid=$!
+
+"$qemu" -machine q35,accel=kvm -cpu host -smp 2 -m 6G \
+  -bios "$ovmf" -boot n -display none -monitor none \
+  -serial "file:$log" \
+  -netdev "user,id=n0,tftp=$tree/tftp,bootfile=ipxe.efi" \
+  -device virtio-net-pci,netdev=n0 \
+  >"$work/qemu.log" 2>&1 &
+qemu_pid=$!
+
+echo "booting Fedora CoreOS $(python3 -c 'import json,sys;print(json.load(open(sys.argv[1]))["release"])' "$here/nix/fcos-pin.json") over PXE"
+deadline=$(( SECONDS + timeout ))
+while (( SECONDS < deadline )); do
+  if grep -aq 'PXE-TEST-BOOTED' "$log" 2>/dev/null; then
+    grep -a 'PXE-TEST-BOOTED' "$log" | head -1 | tr -d '\r'
+    echo "PASS: UEFI PXE -> iPXE -> Fedora CoreOS live with Ignition in $((SECONDS))s"
+    exit 0
+  fi
+  if ! kill -0 "$qemu_pid" 2>/dev/null; then
+    echo "FAIL: QEMU exited" >&2
+    cat "$work/qemu.log" >&2
+    exit 1
+  fi
+  sleep 5
+done
+echo "FAIL: no marker after ${timeout}s; last serial output:" >&2
+sed 's/\x1b\[[0-9;]*[a-zA-Z]//g' "$log" | tr -d '\r' | tail -40 >&2
+exit 1

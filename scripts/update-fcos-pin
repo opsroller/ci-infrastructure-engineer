@@ -1,0 +1,12 @@
+#!/usr/bin/env bash
+# SPDX-License-Identifier: GPL-2.0-or-later
+# Pin the current Fedora CoreOS PXE artifacts for one stream and architecture.
+# Usage: scripts/update-fcos-pin [stream] [arch] > nix/fcos-pin.json
+set -euo pipefail
+stream=${1:-stable}
+arch=${2:-x86_64}
+curl -fsSL "https://builds.coreos.fedoraproject.org/streams/${stream}.json" |
+  jq --arg s "$stream" --arg a "$arch" '
+    .architectures[$a].artifacts.metal as $m
+    | { stream: $s, architecture: $a, release: $m.release }
+      + ($m.formats.pxe | map_values({ url: .location, sha256: .sha256 }))'
