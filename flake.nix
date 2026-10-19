@@ -65,7 +65,6 @@
             installPhase = "mkdir -p $out";
             nativeBuildInputs = with pkgs; [
               butane
-              coreos-installer
               curl
               jq
               libvirt

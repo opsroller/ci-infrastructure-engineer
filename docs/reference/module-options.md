@@ -34,7 +34,7 @@ NixOS module `nixosModules.pxe-coreos` (also `nixosModules.default`).
 
 | Output | Purpose |
 | --- | --- |
-| `packages.x86_64-linux.default` | Tools: butane, coreos-installer, curl, jq, libvirt, OVMF, gh |
+| `packages.x86_64-linux.default` | Tools: butane, curl, jq, libvirt, OVMF, gh |
 | `packages.x86_64-linux.pxe-test` | TFTP and HTTP trees used by `scripts/test-pxe-boot` |
 | `checks.x86_64-linux.dnsmasq-config` | Evaluates the module and runs `dnsmasq --test` on its config |
 
