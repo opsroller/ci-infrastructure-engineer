@@ -1,0 +1,77 @@
+#!/usr/bin/env bash
+# SPDX-License-Identifier: GPL-2.0-or-later
+#
+# Runs the PXE server as a persistent libvirt guest attached straight to a
+# host LAN interface (macvtap), so the host's own system config is unchanged.
+# The guest takes its address from the LAN's DHCP server. Its disk is a
+# volume in a libvirt storage pool.
+#
+# Usage:
+#   scripts/pxe-server-vm up <host-interface> <butane.nix>
+#   scripts/pxe-server-vm down
+#   scripts/pxe-server-vm status
+#
+# <butane.nix> is a Nix file evaluating to the Butane config (fcos variant)
+# for the machines that boot, as an attribute set.
+# Env: NAME (default pxe-server), POOL (default default),
+#      URI (default qemu:///system).
+set -euo pipefail
+
+name=${NAME:-pxe-server}
+pool=${POOL:-default}
+uri=${URI:-qemu:///system}
+vol=$name.qcow2
+here=$(cd "$(dirname "$0")/.." && pwd)
+v() { virsh -q -c "$uri" "$@"; }
+
+usage() { sed -n '9,13p' "$0" | sed 's/^# \{0,1\}//' >&2; exit 2; }
+
+down() {
+  v destroy "$name" >/dev/null 2>&1 || true
+  v undefine "$name" >/dev/null 2>&1 || true
+  v vol-delete --pool "$pool" "$vol" >/dev/null 2>&1 || true
+}
+
+case ${1:-} in
+up)
+  iface=${2:-}; butane=${3:-}
+  [[ -n $iface && -f $butane ]] || usage
+  butane=$(realpath "$butane")
+  image=$(nix build --no-link --print-out-paths --impure --expr "
+    (builtins.getFlake \"path:$here\").packages.\${builtins.currentSystem}.pxe-server-image.override {
+      butane = import $butane;
+    }")/nixos.qcow2
+  down
+  v vol-create-as "$pool" "$vol" "$(stat -c %s "$image")" --format qcow2 >/dev/null
+  v vol-upload --pool "$pool" "$vol" "$image"
+  v define /dev/stdin >/dev/null <<XML
+<domain type='kvm'>
+  <name>$name</name>
+  <memory unit='GiB'>2</memory>
+  <vcpu>2</vcpu>
+  <os><type arch='x86_64' machine='q35'>hvm</type></os>
+  <features><acpi/></features>
+  <cpu mode='host-passthrough'/>
+  <devices>
+    <disk type='volume' device='disk'>
+      <driver name='qemu' type='qcow2'/>
+      <source pool='$pool' volume='$vol'/>
+      <target dev='vda' bus='virtio'/>
+    </disk>
+    <interface type='direct'>
+      <source dev='$iface' mode='bridge'/>
+      <model type='virtio'/>
+    </interface>
+    <serial type='pty'/>
+    <console type='pty'/>
+  </devices>
+</domain>
+XML
+  v autostart "$name" >/dev/null
+  v start "$name" >/dev/null
+  echo "$name started on $iface; watch it with: virsh -c $uri console $name"
+  ;;
+down) down; echo "$name removed" ;;
+status) v dominfo "$name" | grep -E 'Name|State|Autostart'; v domiflist "$name" ;;
+*) usage ;;
+esac

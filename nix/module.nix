@@ -22,12 +22,26 @@ let
       ;
   };
 
+  # With no fixed network, serve the subnet the interface is on right now.
+  startDnsmasq = pkgs.writeShellScript "pxe-coreos-dnsmasq" ''
+    set -eu
+    range=
+    if ${lib.boolToString (cfg.network == null)}; then
+      addr=$(${pkgs.iproute2}/bin/ip -4 -o addr show dev ${cfg.interface} | ${pkgs.gawk}/bin/awk '{ split($4, a, "/"); print a[1]; exit }')
+      [ -n "$addr" ] || { echo "no IPv4 address on ${cfg.interface}" >&2; exit 1; }
+      range=--dhcp-range=$addr,proxy
+    fi
+    exec ${pkgs.dnsmasq}/bin/dnsmasq --keep-in-foreground --log-facility=- --user=nobody --conf-file=${dnsmasqConf} $range
+  '';
+
   dnsmasqConf = pkgs.writeText "pxe-coreos-dnsmasq.conf" ''
     # No DNS; proxy-DHCP and TFTP only.
     port=0
     interface=${cfg.interface}
     bind-dynamic
-    dhcp-range=${cfg.network},proxy
+    # Proxy-DHCP keeps no leases, but dnsmasq still opens the file.
+    dhcp-leasefile=/var/lib/pxe-coreos/dnsmasq.leases
+    ${lib.optionalString (cfg.network != null) "dhcp-range=${cfg.network},proxy"}
     enable-tftp
     tftp-root=${tree.tftpRoot}
     pxe-prompt="Fedora CoreOS network boot",0
@@ -47,19 +61,26 @@ in
     };
 
     network = lib.mkOption {
-      type = lib.types.str;
+      type = lib.types.nullOr lib.types.str;
+      default = null;
       example = "192.168.1.0";
       description = ''
         Network address of that interface's subnet. Proxy-DHCP answers
         boot requests there and leaves address assignment to the existing
-        DHCP server.
+        DHCP server. null (the default) uses the subnet of the interface's
+        IPv4 address when the service starts.
       '';
     };
 
     serverAddress = lib.mkOption {
-      type = lib.types.str;
+      type = lib.types.nullOr lib.types.str;
+      default = null;
       example = "192.168.1.10";
-      description = "This host's address on that network, used in boot URLs.";
+      description = ''
+        This host's address on that network, used in boot URLs. null (the
+        default) lets iPXE take it from the proxy-DHCP answer, so this host
+        may get its own address from DHCP.
+      '';
     };
 
     httpPort = lib.mkOption {
@@ -116,8 +137,10 @@ in
       wants = [ "network-online.target" ];
       serviceConfig = {
         ExecStartPre = "${pkgs.dnsmasq}/bin/dnsmasq --test --conf-file=${dnsmasqConf}";
-        ExecStart = "${pkgs.dnsmasq}/bin/dnsmasq --keep-in-foreground --log-facility=- --user=nobody --conf-file=${dnsmasqConf}";
+        ExecStart = startDnsmasq;
+        StateDirectory = "pxe-coreos";
         Restart = "on-failure";
+        RestartSec = 5;
       };
     };
 

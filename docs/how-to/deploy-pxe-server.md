@@ -18,8 +18,6 @@ from a NixOS host. The LAN must already have a DHCP server.
    services.pxe-coreos = {
      enable = true;
      interface = "eno1";
-     network = "192.168.1.0";        # the LAN's network address
-     serverAddress = "192.168.1.10"; # this host's address on it
      butane = {
        variant = "fcos";
        version = "1.6.0";
@@ -30,8 +28,8 @@ from a NixOS host. The LAN must already have a DHCP server.
    };
    ```
 
-   Give the host a fixed address, such as a DHCP reservation, because
-   the boot URLs contain `serverAddress`.
+   The subnet and this host's address are found at boot time, so the
+   host may take its address from DHCP.
 
 3. Rebuild and switch:
 

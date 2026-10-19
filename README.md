@@ -18,7 +18,8 @@ VM storage is left to libvirt.
 ## Documentation
 
 - Tutorial: [Network-boot Fedora CoreOS in a test VM](docs/tutorials/boot-test.md)
-- How-to: [Run the PXE server on a NixOS host](docs/how-to/deploy-pxe-server.md),
+- How-to: [Run the PXE server as a libvirt guest](docs/how-to/run-pxe-server-vm.md),
+  [Run the PXE server on a NixOS host](docs/how-to/deploy-pxe-server.md),
   [Update the pinned Fedora CoreOS release](docs/how-to/update-fcos-pin.md)
 - Reference: [`services.pxe-coreos` options](docs/reference/module-options.md)
 - Explanation: [How the network boot works](docs/explanation/network-boot.md)
